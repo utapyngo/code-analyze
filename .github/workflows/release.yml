@@ -27,6 +27,9 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
 
     steps:
       - uses: actions/checkout@v4
@@ -45,10 +48,17 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
           tar czvf ../../../code-analyze-${{ matrix.target }}.${{ matrix.archive }} analyze
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../code-analyze-${{ matrix.target }}.${{ matrix.archive }} analyze.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
