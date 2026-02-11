@@ -239,6 +239,6 @@ mod tests {
 
     #[test]
     fn default_traverser() {
-        let _t = FileTraverser::default();
+        let _t = FileTraverser;
     }
 }

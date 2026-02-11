@@ -13,4 +13,4 @@ ls -lh "$DIST/" "$DIST/scripts/"
 
 [tasks.lint]
 description = "Run clippy and check formatting"
-run = "cargo clippy -- -D warnings && cargo fmt --check"
+run = "cargo clippy --all-targets -- -D warnings && cargo fmt --check"

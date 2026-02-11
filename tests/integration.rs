@@ -199,7 +199,7 @@ fn analyze_empty_directory() {
 fn analyze_binary_file_no_crash() {
     let dir = tempfile::tempdir().unwrap();
     let bin_path = dir.path().join("data.rs");
-    std::fs::write(&bin_path, &[0u8, 1, 2, 0xFF, 0xFE, 0xFD]).unwrap();
+    std::fs::write(&bin_path, [0u8, 1, 2, 0xFF, 0xFE, 0xFD]).unwrap();
     // Should not panic; may return empty result
     let out = code_analyze::analyze(&bin_path.to_string_lossy(), None, 2, 3, None, &cwd());
     assert!(

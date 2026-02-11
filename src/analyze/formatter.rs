@@ -800,13 +800,14 @@ mod tests {
         let chain = CallChain {
             path: vec![(PathBuf::from("a.rs"), 10, "caller".into(), "target".into())],
         };
+        let chain2 = chain.clone();
         let data = FocusedAnalysisData {
             focus_symbol: "target",
             follow_depth: 1,
             files_analyzed: &[PathBuf::from("a.rs")],
             definitions: &defs,
-            incoming_chains: &[chain.clone()],
-            outgoing_chains: &[chain],
+            incoming_chains: std::slice::from_ref(&chain),
+            outgoing_chains: std::slice::from_ref(&chain2),
         };
         let out = Formatter::format_focused_output(&data);
         assert!(out.contains("INCOMING CALL CHAINS"));
