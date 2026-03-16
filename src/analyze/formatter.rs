@@ -13,8 +13,11 @@ fn safe_truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         s.to_string()
     } else {
-        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
-        format!("{}...", truncated)
+        let end = s
+            .char_indices()
+            .nth(max_chars.saturating_sub(3))
+            .map_or(s.len(), |(i, _)| i);
+        format!("{}...", &s[..end])
     }
 }
 
@@ -305,7 +308,11 @@ impl Formatter {
             let EntryType::File(result) = entry;
             let lang_id = lang::get_language_identifier(path);
             if !lang_id.is_empty() && result.line_count > 0 {
-                *language_lines.entry(lang_id.to_string()).or_insert(0) += result.line_count;
+                if let Some(count) = language_lines.get_mut(lang_id) {
+                    *count += result.line_count;
+                } else {
+                    language_lines.insert(lang_id.to_string(), result.line_count);
+                }
             }
         }
 

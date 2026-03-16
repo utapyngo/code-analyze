@@ -131,9 +131,9 @@ impl CallGraph {
 
             if let Some(callers) = self.callers.get(&current_symbol) {
                 for (file, line, caller) in callers {
-                    let mut new_path =
-                        vec![(file.clone(), *line, caller.clone(), current_symbol.clone())];
-                    new_path.extend(path.clone());
+                    let mut new_path = Vec::with_capacity(path.len() + 1);
+                    new_path.push((file.clone(), *line, caller.clone(), current_symbol.clone()));
+                    new_path.extend_from_slice(&path);
 
                     if depth + 1 >= max_depth {
                         chains.push(CallChain { path: new_path });
