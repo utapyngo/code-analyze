@@ -14,8 +14,6 @@ use super::types::{AnalysisMode, AnalysisResult};
 #[derive(Clone)]
 pub struct AnalysisCache {
     cache: Arc<Mutex<LruCache<CacheKey, Arc<AnalysisResult>>>>,
-    #[allow(dead_code)]
-    max_size: usize,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
@@ -37,7 +35,6 @@ impl AnalysisCache {
 
         Self {
             cache: Arc::new(Mutex::new(LruCache::new(size))),
-            max_size,
         }
     }
 
