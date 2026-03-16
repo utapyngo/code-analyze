@@ -5,6 +5,7 @@
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
+use super::error::AnalyzeError;
 use super::types::{AnalysisResult, EntryType};
 use crate::lang;
 
@@ -23,9 +24,12 @@ impl FileTraverser {
     }
 
     /// Validate that a path exists
-    pub fn validate_path(&self, path: &Path) -> Result<(), String> {
+    pub fn validate_path(&self, path: &Path) -> Result<(), AnalyzeError> {
         if !path.exists() {
-            return Err(format!("Path '{}' does not exist", path.display()));
+            return Err(AnalyzeError::Other(format!(
+                "Path '{}' does not exist",
+                path.display()
+            )));
         }
         Ok(())
     }
@@ -35,7 +39,7 @@ impl FileTraverser {
         &self,
         path: &Path,
         max_depth: u32,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, AnalyzeError> {
         let files = self.collect_files_recursive(path, 0, max_depth)?;
         Ok(files)
     }
@@ -46,7 +50,7 @@ impl FileTraverser {
         path: &Path,
         current_depth: u32,
         max_depth: u32,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, AnalyzeError> {
         let mut files = Vec::new();
 
         if path.is_file() {
@@ -62,11 +66,17 @@ impl FileTraverser {
             return Ok(files);
         }
 
-        let entries = std::fs::read_dir(path)
-            .map_err(|e| format!("Failed to read directory '{}': {}", path.display(), e))?;
+        let entries = std::fs::read_dir(path).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("Failed to read directory '{}': {}", path.display(), e),
+            )
+        })?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+            let entry = entry.map_err(|e| {
+                std::io::Error::new(e.kind(), format!("Failed to read directory entry: {}", e))
+            })?;
 
             let entry_path = entry.path();
 
@@ -102,13 +112,13 @@ impl FileTraverser {
         path: &Path,
         max_depth: u32,
         analyze_file: F,
-    ) -> Result<Vec<(PathBuf, EntryType)>, String>
+    ) -> Result<Vec<(PathBuf, EntryType)>, AnalyzeError>
     where
-        F: Fn(&Path) -> Result<AnalysisResult, String> + Sync,
+        F: Fn(&Path) -> Result<AnalysisResult, AnalyzeError> + Sync,
     {
         let files_to_analyze = self.collect_files_recursive(path, 0, max_depth)?;
 
-        let results: Result<Vec<_>, String> = files_to_analyze
+        let results: Result<Vec<_>, AnalyzeError> = files_to_analyze
             .par_iter()
             .map(|file_path| {
                 analyze_file(file_path).map(|result| (file_path.clone(), EntryType::File(result)))
@@ -137,7 +147,7 @@ mod tests {
         let t = FileTraverser::new();
         let result = t.validate_path(Path::new("/tmp/nonexistent_xyz_12345"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("does not exist"));
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
     }
 
     #[test]

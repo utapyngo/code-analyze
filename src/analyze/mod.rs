@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod cache;
+pub mod error;
 pub mod formatter;
 pub mod graph;
 pub mod languages;
@@ -13,6 +14,7 @@ pub mod types;
 use std::path::{Path, PathBuf};
 
 use self::cache::AnalysisCache;
+pub use self::error::AnalyzeError;
 use self::formatter::Formatter;
 use self::graph::CallGraph;
 use self::parser::{ElementExtractor, ParserManager};
@@ -74,15 +76,22 @@ impl CodeAnalyzer {
         path: &Path,
         mode: &AnalysisMode,
         ast_recursion_limit: Option<usize>,
-    ) -> Result<AnalysisResult, String> {
-        let metadata = std::fs::metadata(path)
-            .map_err(|e| format!("Failed to get metadata for '{}': {}", path.display(), e))?;
+    ) -> Result<AnalysisResult, AnalyzeError> {
+        let metadata = std::fs::metadata(path).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("Failed to get metadata for '{}': {}", path.display(), e),
+            )
+        })?;
 
         let modified = metadata.modified().map_err(|e| {
-            format!(
-                "Failed to get modification time for '{}': {}",
-                path.display(),
-                e
+            std::io::Error::new(
+                e.kind(),
+                format!(
+                    "Failed to get modification time for '{}': {}",
+                    path.display(),
+                    e
+                ),
             )
         })?;
 
@@ -138,7 +147,7 @@ impl CodeAnalyzer {
         ast_recursion_limit: Option<usize>,
         traverser: &FileTraverser,
         mode: &AnalysisMode,
-    ) -> Result<String, String> {
+    ) -> Result<String, AnalyzeError> {
         let mode = *mode;
 
         let results = traverser.collect_directory_results(path, max_depth, |file_path| {
@@ -158,7 +167,7 @@ impl CodeAnalyzer {
         max_depth: u32,
         ast_recursion_limit: Option<usize>,
         traverser: &FileTraverser,
-    ) -> Result<String, String> {
+    ) -> Result<String, AnalyzeError> {
         let files_to_analyze = if path.is_file() {
             vec![path.to_path_buf()]
         } else {
@@ -239,7 +248,7 @@ pub fn analyze(
     let traverser = FileTraverser::new();
 
     if let Err(e) = traverser.validate_path(&abs_path) {
-        return e;
+        return e.to_string();
     }
 
     let focus_owned = focus.map(|s| s.to_string());

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tree_sitter::{Language, Parser, StreamingIterator, Tree};
 
+use super::error::AnalyzeError;
 use super::lock_or_recover;
 use super::types::{
     AnalysisResult, CallInfo, ClassInfo, ElementQueryResult, FunctionInfo, ReferenceInfo,
@@ -24,7 +25,7 @@ impl ParserManager {
         }
     }
 
-    pub fn get_or_create_parser(&self, language: &str) -> Result<Arc<Mutex<Parser>>, String> {
+    pub fn get_or_create_parser(&self, language: &str) -> Result<Arc<Mutex<Parser>>, AnalyzeError> {
         let mut cache = lock_or_recover(&self.parsers, |c| c.clear());
 
         if let Some(parser) = cache.get(language) {
@@ -42,26 +43,29 @@ impl ParserManager {
             "swift" => tree_sitter_swift::LANGUAGE.into(),
             "ruby" => tree_sitter_ruby::LANGUAGE.into(),
             _ => {
-                return Err(format!("Unsupported language: {}", language));
+                return Err(AnalyzeError::Parse(format!(
+                    "Unsupported language: {}",
+                    language
+                )));
             }
         };
 
-        parser
-            .set_language(&language_config)
-            .map_err(|e| format!("Failed to set language for {}: {}", language, e))?;
+        parser.set_language(&language_config).map_err(|e| {
+            AnalyzeError::TreeSitter(format!("Failed to set language for {}: {}", language, e))
+        })?;
 
         let parser_arc = Arc::new(Mutex::new(parser));
         cache.insert(language.to_string(), Arc::clone(&parser_arc));
         Ok(parser_arc)
     }
 
-    pub fn parse(&self, content: &str, language: &str) -> Result<Tree, String> {
+    pub fn parse(&self, content: &str, language: &str) -> Result<Tree, AnalyzeError> {
         let parser_arc = self.get_or_create_parser(language)?;
         let mut parser = lock_or_recover(&parser_arc, |_| {});
 
         parser
             .parse(content, None)
-            .ok_or_else(|| format!("Failed to parse file as {}", language))
+            .ok_or_else(|| AnalyzeError::Parse(format!("Failed to parse file as {}", language)))
     }
 }
 
@@ -91,7 +95,7 @@ impl ElementExtractor {
         language: &str,
         depth: &str,
         ast_recursion_limit: Option<usize>,
-    ) -> Result<AnalysisResult, String> {
+    ) -> Result<AnalysisResult, AnalyzeError> {
         use super::languages;
 
         let mut result = Self::extract_elements(tree, source, language)?;
@@ -130,7 +134,7 @@ impl ElementExtractor {
         tree: &Tree,
         source: &str,
         language: &str,
-    ) -> Result<AnalysisResult, String> {
+    ) -> Result<AnalysisResult, AnalyzeError> {
         use super::languages;
 
         let info = match languages::get_language_info(language) {
@@ -162,7 +166,7 @@ impl ElementExtractor {
         tree: &Tree,
         source: &str,
         query_str: &str,
-    ) -> Result<ElementQueryResult, String> {
+    ) -> Result<ElementQueryResult, AnalyzeError> {
         use tree_sitter::{Query, QueryCursor};
 
         let mut functions = Vec::new();
@@ -170,7 +174,7 @@ impl ElementExtractor {
         let mut imports = Vec::new();
 
         let query = Query::new(&tree.language(), query_str)
-            .map_err(|e| format!("Failed to create query: {}", e))?;
+            .map_err(|e| AnalyzeError::TreeSitter(format!("Failed to create query: {}", e)))?;
 
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
@@ -212,7 +216,11 @@ impl ElementExtractor {
         Ok((functions, classes, imports))
     }
 
-    fn extract_calls(tree: &Tree, source: &str, language: &str) -> Result<Vec<CallInfo>, String> {
+    fn extract_calls(
+        tree: &Tree,
+        source: &str,
+        language: &str,
+    ) -> Result<Vec<CallInfo>, AnalyzeError> {
         use super::languages;
         use tree_sitter::{Query, QueryCursor};
 
@@ -226,7 +234,7 @@ impl ElementExtractor {
         let query_str = info.call_query;
 
         let query = Query::new(&tree.language(), query_str)
-            .map_err(|e| format!("Failed to create call query: {}", e))?;
+            .map_err(|e| AnalyzeError::TreeSitter(format!("Failed to create call query: {}", e)))?;
 
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
@@ -284,7 +292,7 @@ impl ElementExtractor {
         source: &str,
         language: &str,
         ast_recursion_limit: Option<usize>,
-    ) -> Result<Vec<ReferenceInfo>, String> {
+    ) -> Result<Vec<ReferenceInfo>, AnalyzeError> {
         use super::languages;
         use tree_sitter::{Query, QueryCursor};
 
@@ -297,8 +305,9 @@ impl ElementExtractor {
 
         let query_str = info.reference_query;
 
-        let query = Query::new(&tree.language(), query_str)
-            .map_err(|e| format!("Failed to create reference query: {}", e))?;
+        let query = Query::new(&tree.language(), query_str).map_err(|e| {
+            AnalyzeError::TreeSitter(format!("Failed to create reference query: {}", e))
+        })?;
 
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());

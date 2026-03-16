@@ -5,4 +5,5 @@
 mod analyze;
 mod lang;
 
+pub use analyze::AnalyzeError;
 pub use analyze::analyze;
