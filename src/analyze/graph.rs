@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use super::types::{AnalysisResult, CallChain, ReferenceType};
 
+type PathEntry = (PathBuf, usize, String, String);
+
 /// Sentinel value used to represent type references as callers in the call graph
 const REFERENCE_CALLER: &str = "<reference>";
 
@@ -97,59 +99,49 @@ impl CallGraph {
     }
 
     pub fn find_incoming_chains(&self, symbol: &str, max_depth: u32) -> Vec<CallChain> {
-        if max_depth == 0 {
-            return vec![];
-        }
-
-        let mut chains = Vec::new();
-        let mut visited = HashSet::new();
-        let mut queue = VecDeque::new();
-
-        if let Some(direct_callers) = self.callers.get(symbol) {
-            for (file, line, caller) in direct_callers {
-                let initial_path = vec![(file.clone(), *line, caller.clone(), symbol.to_string())];
-
-                if max_depth == 1 {
-                    chains.push(CallChain { path: initial_path });
-                } else {
-                    queue.push_back((caller.clone(), initial_path, 1));
-                }
-            }
-        }
-
-        while let Some((current_symbol, path, depth)) = queue.pop_front() {
-            if depth >= max_depth {
-                chains.push(CallChain { path });
-                continue;
-            }
-
-            if visited.contains(&current_symbol) {
-                chains.push(CallChain { path });
-                continue;
-            }
-            visited.insert(current_symbol.clone());
-
-            if let Some(callers) = self.callers.get(&current_symbol) {
-                for (file, line, caller) in callers {
-                    let mut new_path = Vec::with_capacity(path.len() + 1);
-                    new_path.push((file.clone(), *line, caller.clone(), current_symbol.clone()));
-                    new_path.extend_from_slice(&path);
-
-                    if depth + 1 >= max_depth {
-                        chains.push(CallChain { path: new_path });
-                    } else {
-                        queue.push_back((caller.clone(), new_path, depth + 1));
-                    }
-                }
-            } else {
-                chains.push(CallChain { path });
-            }
-        }
-
-        chains
+        self.find_chains(
+            symbol,
+            max_depth,
+            &self.callers,
+            |current, file, line, neighbor| {
+                vec![(file.clone(), line, neighbor.to_owned(), current.to_owned())]
+            },
+            |path, mut entry| {
+                entry.extend_from_slice(path);
+                entry
+            },
+        )
     }
 
     pub fn find_outgoing_chains(&self, symbol: &str, max_depth: u32) -> Vec<CallChain> {
+        self.find_chains(
+            symbol,
+            max_depth,
+            &self.callees,
+            |current, file, line, neighbor| {
+                vec![(file.clone(), line, current.to_owned(), neighbor.to_owned())]
+            },
+            |path, entry| {
+                let mut new_path = path.to_vec();
+                new_path.extend(entry);
+                new_path
+            },
+        )
+    }
+
+    /// Generic BFS traversal over the call graph.
+    ///
+    /// `edges` selects the adjacency map (callers or callees).
+    /// `make_entry` builds a path segment from `(current_symbol, file, line, neighbor)`.
+    /// `extend_path` merges an existing path with a new entry (prepend for incoming, append for outgoing).
+    fn find_chains(
+        &self,
+        symbol: &str,
+        max_depth: u32,
+        edges: &HashMap<String, Vec<(PathBuf, usize, String)>>,
+        make_entry: impl Fn(&str, &PathBuf, usize, &str) -> Vec<PathEntry>,
+        extend_path: impl Fn(&[PathEntry], Vec<PathEntry>) -> Vec<PathEntry>,
+    ) -> Vec<CallChain> {
         if max_depth == 0 {
             return vec![];
         }
@@ -158,39 +150,34 @@ impl CallGraph {
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
 
-        if let Some(direct_callees) = self.callees.get(symbol) {
-            for (file, line, callee) in direct_callees {
-                let initial_path = vec![(file.clone(), *line, symbol.to_string(), callee.clone())];
+        if let Some(direct) = edges.get(symbol) {
+            for (file, line, neighbor) in direct {
+                let initial_path = make_entry(symbol, file, *line, neighbor);
 
                 if max_depth == 1 {
                     chains.push(CallChain { path: initial_path });
                 } else {
-                    queue.push_back((callee.clone(), initial_path, 1));
+                    queue.push_back((neighbor.clone(), initial_path, 1));
                 }
             }
         }
 
         while let Some((current_symbol, path, depth)) = queue.pop_front() {
-            if depth >= max_depth {
-                chains.push(CallChain { path });
-                continue;
-            }
-
-            if visited.contains(&current_symbol) {
+            if depth >= max_depth || visited.contains(&current_symbol) {
                 chains.push(CallChain { path });
                 continue;
             }
             visited.insert(current_symbol.clone());
 
-            if let Some(callees) = self.callees.get(&current_symbol) {
-                for (file, line, callee) in callees {
-                    let mut new_path = path.clone();
-                    new_path.push((file.clone(), *line, current_symbol.clone(), callee.clone()));
+            if let Some(neighbors) = edges.get(&current_symbol) {
+                for (file, line, neighbor) in neighbors {
+                    let entry = make_entry(&current_symbol, file, *line, neighbor);
+                    let new_path = extend_path(&path, entry);
 
                     if depth + 1 >= max_depth {
                         chains.push(CallChain { path: new_path });
                     } else {
-                        queue.push_back((callee.clone(), new_path, depth + 1));
+                        queue.push_back((neighbor.clone(), new_path, depth + 1));
                     }
                 }
             } else {
