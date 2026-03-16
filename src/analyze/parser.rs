@@ -2,71 +2,62 @@
 // Copyright 2025 utapyngo (modifications)
 // SPDX-License-Identifier: Apache-2.0
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use tree_sitter::{Language, Parser, StreamingIterator, Tree};
 
 use super::error::AnalyzeError;
-use super::lock_or_recover;
 use super::types::{
     AnalysisResult, CallInfo, ClassInfo, ElementQueryResult, FunctionInfo, ReferenceInfo,
     ReferenceType,
 };
 
 #[derive(Clone)]
-pub struct ParserManager {
-    parsers: Arc<Mutex<HashMap<String, Arc<Mutex<Parser>>>>>,
-}
+pub struct ParserManager;
 
 impl ParserManager {
     pub fn new() -> Self {
-        Self {
-            parsers: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    pub fn get_or_create_parser(&self, language: &str) -> Result<Arc<Mutex<Parser>>, AnalyzeError> {
-        let mut cache = lock_or_recover(&self.parsers, |c| c.clear());
-
-        if let Some(parser) = cache.get(language) {
-            return Ok(Arc::clone(parser));
-        }
-
-        let mut parser = Parser::new();
-        let language_config: Language = match language {
-            "python" => tree_sitter_python::LANGUAGE.into(),
-            "rust" => tree_sitter_rust::LANGUAGE.into(),
-            "javascript" | "typescript" => tree_sitter_javascript::LANGUAGE.into(),
-            "go" => tree_sitter_go::LANGUAGE.into(),
-            "java" => tree_sitter_java::LANGUAGE.into(),
-            "kotlin" => tree_sitter_kotlin_ng::LANGUAGE.into(),
-            "swift" => tree_sitter_swift::LANGUAGE.into(),
-            "ruby" => tree_sitter_ruby::LANGUAGE.into(),
-            _ => {
-                return Err(AnalyzeError::Parse(format!(
-                    "Unsupported language: {}",
-                    language
-                )));
-            }
-        };
-
-        parser.set_language(&language_config).map_err(|e| {
-            AnalyzeError::TreeSitter(format!("Failed to set language for {}: {}", language, e))
-        })?;
-
-        let parser_arc = Arc::new(Mutex::new(parser));
-        cache.insert(language.to_string(), Arc::clone(&parser_arc));
-        Ok(parser_arc)
+        Self
     }
 
     pub fn parse(&self, content: &str, language: &str) -> Result<Tree, AnalyzeError> {
-        let parser_arc = self.get_or_create_parser(language)?;
-        let mut parser = lock_or_recover(&parser_arc, |_| {});
+        // Validate language name before accessing thread-local
+        let lang_config = language_for(language)?;
 
-        parser
-            .parse(content, None)
-            .ok_or_else(|| AnalyzeError::Parse(format!("Failed to parse file as {}", language)))
+        THREAD_PARSERS.with(|parsers| {
+            let mut parsers = parsers.borrow_mut();
+            let parser = parsers.entry(language.to_string()).or_insert_with(|| {
+                let mut p = Parser::new();
+                // language_for already validated, set_language shouldn't fail
+                let _ = p.set_language(&lang_config);
+                p
+            });
+            parser
+                .parse(content, None)
+                .ok_or_else(|| AnalyzeError::Parse(format!("Failed to parse file as {}", language)))
+        })
     }
+}
+
+fn language_for(name: &str) -> Result<Language, AnalyzeError> {
+    match name {
+        "python" => Ok(tree_sitter_python::LANGUAGE.into()),
+        "rust" => Ok(tree_sitter_rust::LANGUAGE.into()),
+        "javascript" | "typescript" => Ok(tree_sitter_javascript::LANGUAGE.into()),
+        "go" => Ok(tree_sitter_go::LANGUAGE.into()),
+        "java" => Ok(tree_sitter_java::LANGUAGE.into()),
+        "kotlin" => Ok(tree_sitter_kotlin_ng::LANGUAGE.into()),
+        "swift" => Ok(tree_sitter_swift::LANGUAGE.into()),
+        "ruby" => Ok(tree_sitter_ruby::LANGUAGE.into()),
+        _ => Err(AnalyzeError::Parse(format!(
+            "Unsupported language: {}",
+            name
+        ))),
+    }
+}
+
+thread_local! {
+    static THREAD_PARSERS: RefCell<HashMap<String, Parser>> = RefCell::new(HashMap::new());
 }
 
 impl Default for ParserManager {
@@ -467,7 +458,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parser_manager_creates_for_supported_languages() {
+    fn parser_manager_parses_supported_languages() {
         let pm = ParserManager::new();
         for lang in &[
             "python",
@@ -480,22 +471,26 @@ mod tests {
             "swift",
             "ruby",
         ] {
-            assert!(pm.get_or_create_parser(lang).is_ok(), "failed for {}", lang);
+            assert!(
+                pm.parse("// placeholder", lang).is_ok(),
+                "failed for {}",
+                lang
+            );
         }
     }
 
     #[test]
     fn parser_manager_rejects_unsupported() {
         let pm = ParserManager::new();
-        assert!(pm.get_or_create_parser("brainfuck").is_err());
+        assert!(pm.parse("code", "brainfuck").is_err());
     }
 
     #[test]
-    fn parser_manager_caches_parser() {
+    fn parser_manager_reuses_thread_local() {
         let pm = ParserManager::new();
-        let p1 = pm.get_or_create_parser("rust").unwrap();
-        let p2 = pm.get_or_create_parser("rust").unwrap();
-        assert!(std::sync::Arc::ptr_eq(&p1, &p2));
+        let t1 = pm.parse("fn main() {}", "rust");
+        let t2 = pm.parse("fn foo() {}", "rust");
+        assert!(t1.is_ok() && t2.is_ok());
     }
 
     #[test]
@@ -578,6 +573,6 @@ mod tests {
 
     #[test]
     fn parser_manager_default_works() {
-        let _pm = ParserManager::default();
+        let _pm: ParserManager = Default::default();
     }
 }
